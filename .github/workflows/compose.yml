@@ -1,0 +1,45 @@
+name: Compose validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create CI environment file
+        run: cp .env.example .env
+
+      - name: Generate test certificate
+        run: |
+          mkdir -p nginx/certs
+          openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 1 \
+            -keyout nginx/certs/site.local.key \
+            -out nginx/certs/site.local.crt \
+            -subj '/CN=site.local' \
+            -addext 'subjectAltName=DNS:site.local'
+
+      - name: Validate Compose file
+        run: docker compose config --quiet
+
+      - name: Start stack
+        run: docker compose up -d --wait --wait-timeout 120
+
+      - name: Check reverse proxies
+        run: |
+          curl --noproxy '*' --fail --insecure --retry 12 --retry-connrefused \
+            --resolve site.local:443:127.0.0.1 https://site.local/
+          curl --noproxy '*' --fail --retry 12 --retry-connrefused \
+            --resolve metrics.local:80:127.0.0.1 http://metrics.local/login
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down --volumes

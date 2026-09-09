@@ -1,0 +1,97 @@
+---
+- name: Deploy WordPress and monitoring stack
+  hosts: wordpress_hosts
+  become: true
+  vars:
+    project_dir: /opt/wordpress-monitoring
+    project_source: "{{ playbook_dir }}/.."
+    docker_packages:
+      Debian:
+        - docker.io
+        - docker-compose-plugin
+      Ubuntu:
+        - docker.io
+        - docker-compose-v2
+
+  tasks:
+    - name: Install required packages
+      ansible.builtin.apt:
+        name: "{{ ['ca-certificates', 'fail2ban', 'openssl'] + docker_packages[ansible_distribution] }}"
+        state: present
+        update_cache: true
+
+    - name: Enable Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Create project directory
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy project files
+      ansible.builtin.copy:
+        src: "{{ project_source }}/{{ item }}"
+        dest: "{{ project_dir }}/"
+        mode: preserve
+      loop:
+        - .env.example
+        - docker-compose.yml
+        - fail2ban
+        - grafana
+        - nginx
+        - prometheus
+
+    - name: Create environment file on first deployment
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/.env.example"
+        dest: "{{ project_dir }}/.env"
+        remote_src: true
+        force: false
+        mode: "0600"
+
+    - name: Create directory for TLS certificate
+      ansible.builtin.file:
+        path: "{{ project_dir }}/nginx/certs"
+        state: directory
+        mode: "0755"
+
+    - name: Generate local TLS certificate when absent
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 365
+          -keyout {{ project_dir }}/nginx/certs/site.local.key
+          -out {{ project_dir }}/nginx/certs/site.local.crt
+          -subj /CN=site.local
+          -addext subjectAltName=DNS:site.local
+        creates: "{{ project_dir }}/nginx/certs/site.local.crt"
+
+    - name: Install fail2ban jail configuration
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/fail2ban/jail.local"
+        dest: /etc/fail2ban/jail.d/wordpress-monitoring.conf
+        remote_src: true
+        mode: "0644"
+      notify: Restart fail2ban
+
+    - name: Validate Compose configuration
+      ansible.builtin.command:
+        cmd: docker compose config --quiet
+        chdir: "{{ project_dir }}"
+      changed_when: false
+
+    - name: Start application stack
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+  handlers:
+    - name: Restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+        enabled: true

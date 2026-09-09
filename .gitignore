@@ -1,0 +1,9 @@
+.env
+Тестовое DevOps (1).docx
+*.log
+nginx/certs/*.crt
+nginx/certs/*.key
+grafana/data/
+prometheus/data/
+wordpress/
+mysql/
